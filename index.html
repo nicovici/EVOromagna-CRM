@@ -173,7 +173,7 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
           titolare: '',
           stato,
           tagPriorita: 'Nuovo',
-          notaInEvidenza: '',
+          evidenza: '',
           timeline: note ? [{
             id: `t_${Date.now()}_${Math.random()}`,
             data: new Date().toISOString(),
@@ -211,7 +211,7 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
       titolare: row.titolare || '',
       stato: row.stato || 'Nuovo',
       tagPriorita: row.tag_priorita || 'Nuovo',
-      notaInEvidenza: row.nota_in_evidenza || '',
+      evidenza: row.evidenza || '',
       timeline: Array.isArray(row.timeline) ? row.timeline : (row.timeline || []),
       dataCreazione: row.created_at,
     });
@@ -235,7 +235,7 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
       titolare: c.titolare,
       stato: c.stato,
       tag_priorita: c.tagPriorita,
-      nota_in_evidenza: c.notaInEvidenza,
+      evidenza: c.evidenza,
       timeline: c.timeline || [],
     });
 
@@ -337,6 +337,7 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
 
       // voce
       const [isListening, setIsListening] = useState(false);
+      const [voiceReview, setVoiceReview] = useState({ open: false, summary: '', updated: [], working: false });
       const recognitionRef = useRef(null);
 
       const userId = session?.user?.id || null;
@@ -637,52 +638,127 @@ const handleCSVImport = async (e) => {
       };
 
       const processVoiceCommand = async (cmd) => {
-        const lower = String(cmd || '').toLowerCase();
-        const targets = (selectedCompanyId && currentView === 'detail') ? [selectedCompanyId] : selectedCompanies;
+        const low = (cmd || '').toLowerCase().trim();
+        if (!low) return;
 
-        if (targets.length === 0) {
-          alert('Nessuna azienda selezionata');
+        // Navigazione semplice
+        if (low.includes('apri aziende')) { setCurrentView('companies'); return; }
+        if (low.includes('apri dashboard')) { setCurrentView('dashboard'); return; }
+        if (low.includes('apri comandi vocali') || low.includes('comandi vocali')) { setCurrentView('voice-help'); return; }
+
+        // Determina target (se hai selezionato più aziende in lista, agisce su quelle; altrimenti su dettaglio)
+        const anyIds = selectedCompanies && selectedCompanies.length ? selectedCompanies : [];
+        const targetIds = anyIds.length
+          ? anyIds
+          : ((selectedCompanyId && currentView === 'detail') ? [selectedCompanyId] : []);
+
+        if (targetIds.length === 0) {
+          alert('Seleziona un’azienda (oppure apri una scheda) prima di dare comandi vocali che modificano dati.');
           return;
         }
 
-        for (const id of targets) {
-          const c = companies.find(x => x.id === id);
-          if (!c) continue;
+        // Helper: trova stato valido
+        const matchStatus = (wanted) => {
+          const w = (wanted || '').trim().toLowerCase();
+          if (!w) return null;
+          const found = (statiPersonalizzati || []).find(s => String(s).toLowerCase() === w);
+          return found || null;
+        };
 
-          let updated = { ...c };
+        // Riconoscimento comandi (modifica dati)
+        let noteText = null;
+        let evidenzaText = null;
+        let statoWanted = null;
 
-          if (lower.includes('aggiungi nota')) {
-            const nota = lower.split('aggiungi nota')[1]?.split(/,|e poi|inoltre/)[0]?.trim()?.replace(/^:\s*/, '') || '';
-            if (nota) {
-              updated.timeline = [{
-                id: `t_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-                data: new Date().toISOString(),
-                tipo: 'nota',
-                testo: nota,
-                operatore: 'Voce'
-              }, ...(updated.timeline || [])];
-            }
-          }
-
-          if (lower.includes('nota in evidenza')) {
-            const nota = lower.split('nota in evidenza')[1]?.split(/,|e poi|inoltre/)[0]?.trim()?.replace(/^:\s*/, '') || '';
-            if (nota) updated.notaInEvidenza = nota;
-          }
-
-          // stato: "imposta stato contattato"
-          if (lower.includes('imposta stato')) {
-            const s = lower.split('imposta stato')[1]?.trim() || '';
-            const match = statiPersonalizzati.find(x => x.toLowerCase() === s.toLowerCase());
-            if (match) updated.stato = match;
-          }
-
-          try {
-            await saveCompany(updated);
-          } catch (e) {
-            alert(`Errore salvataggio (voce): ${e.message || e}`);
-          }
+        // 1) Nota
+        if (low.startsWith('aggiungi nota')) {
+          noteText = cmd.substring(cmd.toLowerCase().indexOf('aggiungi nota') + 'aggiungi nota'.length).trim();
+        } else if (low.startsWith('nota ')) {
+          noteText = cmd.substring(cmd.toLowerCase().indexOf('nota ') + 'nota '.length).trim();
         }
+
+        // 2) Evidenza
+        if (low.startsWith('evidenza')) {
+          evidenzaText = cmd.substring(cmd.toLowerCase().indexOf('evidenza') + 'evidenza'.length).trim();
+        } else if (low.startsWith('imposta evidenza')) {
+          evidenzaText = cmd.substring(cmd.toLowerCase().indexOf('imposta evidenza') + 'imposta evidenza'.length).trim();
+        } else if (low.startsWith('metti in evidenza')) {
+          evidenzaText = cmd.substring(cmd.toLowerCase().indexOf('metti in evidenza') + 'metti in evidenza'.length).trim();
+        }
+
+        // 3) Stato
+        if (low.startsWith('imposta stato')) {
+          statoWanted = cmd.substring(cmd.toLowerCase().indexOf('imposta stato') + 'imposta stato'.length).trim();
+        } else if (low.startsWith('stato ')) {
+          statoWanted = cmd.substring(cmd.toLowerCase().indexOf('stato ') + 'stato '.length).trim();
+        }
+
+        const statusMatched = statoWanted ? matchStatus(statoWanted) : null;
+        if (statoWanted && !statusMatched) {
+          alert(`Stato non riconosciuto: "${statoWanted}".
+Vai in Impostazioni → Gestione Stati per vedere gli stati disponibili.`);
+          return;
+        }
+
+        const hasAnyAction = (noteText && noteText.length) || (evidenzaText && evidenzaText.length) || statusMatched;
+        if (!hasAnyAction) {
+          alert('Comando vocale non riconosciuto.
+Esempi: "aggiungi nota ...", "evidenza ...", "imposta stato Contattato".');
+          return;
+        }
+
+        // Costruisci versione "modificata" delle aziende, SENZA salvare (prima mostriamo popup)
+        const updatedCompanies = targetIds.map(id => {
+          const original = companies.find(c => c.id === id);
+          if (!original) return null;
+
+          const patch = {};
+          if (evidenzaText && evidenzaText.length) patch.evidenza = evidenzaText;
+          if (statusMatched) patch.stato = statusMatched;
+
+          let timeline = Array.isArray(original.timeline) ? [...original.timeline] : [];
+          if (noteText && noteText.length) {
+            timeline.push({
+              id: `t_${Date.now()}_${Math.random()}`,
+              data: new Date().toISOString(),
+              tipo: 'nota',
+              testo: noteText,
+              operatore: 'Voce'
+            });
+          }
+
+          return { ...original, ...patch, timeline };
+        }).filter(Boolean);
+
+        // Riepilogo leggibile
+        const namesPreview = updatedCompanies.slice(0, 8).map(c => `• ${c.ragioneSociale}`).join('
+');
+        const more = updatedCompanies.length > 8 ? `
+…e altre ${updatedCompanies.length - 8}` : '';
+
+        const actions = [];
+        if (noteText && noteText.length) actions.push(`Aggiunge NOTA: "${noteText}"`);
+        if (evidenzaText && evidenzaText.length) actions.push(`Imposta EVIDENZA: "${evidenzaText}"`);
+        if (statusMatched) actions.push(`Imposta STATO: "${statusMatched}"`);
+
+        const summary =
+          `Aziende coinvolte: ${updatedCompanies.length}
+
+` +
+          `Modifiche:
+- ${actions.join('
+- ')}
+
+` +
+          `Elenco (prime):
+${namesPreview}${more}
+
+` +
+          `Vuoi confermare?`;
+
+        setVoiceReview({ open: true, summary, updated: updatedCompanies, working: false });
       };
+
 
       /***************
        * Stati: salva ordine su DB
@@ -769,6 +845,10 @@ const handleCSVImport = async (e) => {
               <button onClick={() => setCurrentView('settings-stati')}
                 className={`px-4 py-3 border-b-2 whitespace-nowrap ${currentView === 'settings-stati' ? 'border-blue-500 text-blue-600' : 'border-transparent'}`}>
                 Gestione Stati
+              </button>
+              <button onClick={() => setCurrentView('voice-help')}
+                className={`px-4 py-3 border-b-2 whitespace-nowrap ${currentView === 'voice-help' ? 'border-blue-500 text-blue-600' : 'border-transparent'}`}>
+                Comandi vocali
               </button>
             </div>
           </nav>
@@ -889,7 +969,8 @@ const handleCSVImport = async (e) => {
                             <td className="p-3">
                               <div>
                                 <p className="font-semibold">{c.ragioneSociale}</p>
-                                {c.notaInEvidenza && <p className="text-sm text-orange-600">⭐ {c.notaInEvidenza}</p>}
+                                {c.titolare ? <p className="text-xs text-gray-600">👤 {c.titolare}</p> : null}
+{c.evidenza && <p className="text-sm text-orange-600">⭐ {c.evidenza}</p>}
                                 <p className="text-xs text-gray-500">{c.telefono}</p>
                               </div>
                             </td>
@@ -990,9 +1071,9 @@ const handleCSVImport = async (e) => {
                     </div>
                   </div>
 
-                  {selectedCompany.notaInEvidenza && (
+                  {selectedCompany.evidenza && (
                     <div className="mt-4 bg-orange-50 border border-orange-200 rounded p-3">
-                      <div className="font-semibold text-orange-800">⭐ {selectedCompany.notaInEvidenza}</div>
+                      <div className="font-semibold text-orange-800">⭐ {selectedCompany.evidenza}</div>
                     </div>
                   )}
 
@@ -1008,7 +1089,12 @@ const handleCSVImport = async (e) => {
                           <input className="border rounded px-2 py-1 w-full" value={selectedCompany.email}
                             onChange={e=>updateSelectedCompanyLocal({ email: e.target.value })} />
                         </div>
-                        <div className="flex items-center gap-2">🌐
+                        
+                        <div className="flex items-center gap-2">👤
+                          <input className="border rounded px-2 py-1 w-full" placeholder="Titolare (nome e cognome)" value={selectedCompany.titolare}
+                            onChange={e=>updateSelectedCompanyLocal({ titolare: e.target.value })} />
+                        </div>
+<div className="flex items-center gap-2">🌐
                           <input className="border rounded px-2 py-1 w-full" value={selectedCompany.sitoWeb}
                             onChange={e=>updateSelectedCompanyLocal({ sitoWeb: e.target.value })} />
                         </div>
@@ -1053,9 +1139,9 @@ const handleCSVImport = async (e) => {
                       </div>
 
                       <div className="mt-4 text-sm">
-                        <label className="text-gray-600">Nota in evidenza</label>
-                        <input className="border rounded px-2 py-1 w-full" value={selectedCompany.notaInEvidenza}
-                          onChange={e=>updateSelectedCompanyLocal({ notaInEvidenza: e.target.value })} />
+                        <label className="text-gray-600">Evidenza</label>
+                        <input className="border rounded px-2 py-1 w-full" value={selectedCompany.evidenza}
+                          onChange={e=>updateSelectedCompanyLocal({ evidenza: e.target.value })} />
                       </div>
                     </div>
                   </div>
@@ -1243,7 +1329,97 @@ const handleCSVImport = async (e) => {
                   </div>
                 </div>
               </div>
+            
+            {currentView === 'voice-help' && (
+              <div className="p-4 sm:p-6">
+                <h2 className="text-2xl font-bold mb-6">Comandi vocali</h2>
+                <div className="bg-white rounded shadow p-6 space-y-4">
+                  <p className="text-gray-700">Puoi parlare dopo aver premuto <b>🎙️ Voce</b>. Il sistema riconosce frasi “naturali” ma queste sono le più affidabili.</p>
+
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left border-b">
+                          <th className="py-2 pr-4">Comando</th>
+                          <th className="py-2 pr-4">Effetto</th>
+                          <th className="py-2">Esempio</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        <tr>
+                          <td className="py-2 pr-4 font-mono">aggiungi nota ...</td>
+                          <td className="py-2 pr-4">Aggiunge una nota in timeline (data/ora + testo) all’azienda selezionata (o a più aziende, se le hai selezionate).</td>
+                          <td className="py-2">“aggiungi nota richiamare domani alle 10”</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2 pr-4 font-mono">evidenza ...</td>
+                          <td className="py-2 pr-4">Imposta il campo <b>Evidenza</b> (testo breve) dell’azienda.</td>
+                          <td className="py-2">“evidenza titolare in ferie fino al 20”</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2 pr-4 font-mono">imposta stato ...</td>
+                          <td className="py-2 pr-4">Cambia lo <b>Stato</b> dell’azienda (deve essere uno degli stati presenti in Impostazioni → Gestione Stati).</td>
+                          <td className="py-2">“imposta stato Contattato”</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2 pr-4 font-mono">apri aziende</td>
+                          <td className="py-2 pr-4">Vai alla schermata Aziende.</td>
+                          <td className="py-2">“apri aziende”</td>
+                        </tr>
+                        <tr>
+                          <td className="py-2 pr-4 font-mono">apri dashboard</td>
+                          <td className="py-2 pr-4">Vai alla Dashboard.</td>
+                          <td className="py-2">“apri dashboard”</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="bg-blue-50 border border-blue-200 rounded p-4">
+                    <p className="text-blue-900"><b>Controllo totale:</b> ogni comando che modifica dati mostra sempre un popup di riepilogo con <i>Conferma</i>/<i>Annulla</i>.</p>
+                  </div>
+                </div>
+              </div>
             )}
+)}
+
+        {voiceReview.open && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+              <h3 className="text-lg font-bold mb-2">Conferma modifiche (comando vocale)</h3>
+              <div className="text-sm bg-gray-50 border rounded p-3 whitespace-pre-wrap max-h-72 overflow-auto">{voiceReview.summary}</div>
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="px-4 py-2 rounded border"
+                  onClick={() => setVoiceReview({ open: false, summary: '', updated: [], working: false })}
+                  disabled={voiceReview.working}
+                >
+                  Annulla
+                </button>
+                <button
+                  className="px-4 py-2 rounded bg-blue-600 text-white"
+                  onClick={async () => {
+                    try {
+                      setVoiceReview(v => ({ ...v, working: true }));
+                      for (const c of voiceReview.updated) {
+                        await saveCompany(c);
+                      }
+                      alert('Modifiche salvate.');
+                    } catch (err) {
+                      alert(`Errore salvataggio modifiche: ${err.message || err}`);
+                    } finally {
+                      setVoiceReview({ open: false, summary: '', updated: [], working: false });
+                    }
+                  }}
+                  disabled={voiceReview.working}
+                >
+                  {voiceReview.working ? 'Salvo…' : 'Conferma'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
           </main>
         </div>
       );
