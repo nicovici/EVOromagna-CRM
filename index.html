@@ -695,8 +695,7 @@ const handleCSVImport = async (e) => {
 
         const statusMatched = statoWanted ? matchStatus(statoWanted) : null;
         if (statoWanted && !statusMatched) {
-          alert(`Stato non riconosciuto: "${statoWanted}".
-Vai in Impostazioni → Gestione Stati per vedere gli stati disponibili.`);
+          alert(`Stato non riconosciuto: "${statoWanted}". Vai in Impostazioni → Gestione Stati per vedere gli stati disponibili.`);
           return;
         }
 
