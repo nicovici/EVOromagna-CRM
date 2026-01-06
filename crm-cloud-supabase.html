@@ -1,0 +1,1119 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CRM Lead Manager (Cloud)</title>
+
+  <!-- React 18 UMD -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel (per JSX in un singolo file) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Tailwind via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Supabase JS v2 -->
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body class="bg-gray-100">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    /***********************
+     * CONFIG SUPABASE
+     * Inserisci qui i tuoi valori (ti spiego sotto dove prenderli)
+     ************************/
+    const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhhaXZoeXlsYWJ4aWlzYmVjd3RkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MDkxODMsImV4cCI6MjA4MzI4NTE4M30.E9HDphXGGjEAo2pC3r6WgOAWWTmROQt0WRTjfonUnpU";
+
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    /***********************
+     * UTIL
+     ************************/
+    const safeUUID = () => {
+      // Chrome/Android moderni: crypto.randomUUID esiste
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+      // fallback: UUID semplice (sufficiente per uso pratico)
+      const s4 = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
+      return `${s4()}${s4()}-${s4()}-${s4()}-${s4()}-${s4()}${s4()}${s4()}`;
+    };
+
+    const parseFinancialValue = (str) => {
+      if (!str || String(str).includes('#')) return 0;
+      let cleaned = String(str).replace(/[^\d.,-]/g, '').trim();
+      const isNegative = cleaned.startsWith('-');
+      if (isNegative) cleaned = cleaned.substring(1);
+
+      if (cleaned.includes('.') && cleaned.includes(',')) {
+        cleaned = cleaned.replace(/\./g, '').replace(',', '.');
+      } else if (cleaned.includes('.')) {
+        const parts = cleaned.split('.');
+        if (parts.length > 2 || (parts[1] && parts[1].length === 3)) {
+          cleaned = cleaned.replace(/\./g, '');
+        }
+      } else if (cleaned.includes(',')) {
+        cleaned = cleaned.replace(',', '.');
+      }
+
+      const value = parseFloat(cleaned);
+      return isNaN(value) ? 0 : Math.round(isNegative ? -value : value);
+    };
+
+    const formatCurrency = (v) => (v ? `€ ${Number(v).toLocaleString('it-IT')}` : '€ 0');
+
+    const formatDateTime = (d) => {
+      if (!d) return '';
+      const dt = new Date(d);
+      const dd = String(dt.getDate()).padStart(2,'0');
+      const mm = String(dt.getMonth()+1).padStart(2,'0');
+      const yy = dt.getFullYear();
+      const hh = String(dt.getHours()).padStart(2,'0');
+      const mi = String(dt.getMinutes()).padStart(2,'0');
+      return `${dd}/${mm}/${yy} ${hh}:${mi}`;
+    };
+
+    // CSV: separatore ';' e prima riga intestazioni
+    const parseCSVData = (csvText) => {
+      const lines = csvText.split('\n');
+      const companies = [];
+      let currentLine = '';
+      let fieldCount = 0;
+
+      for (let i = 1; i < lines.length; i++) {
+        currentLine += (currentLine ? '\n' : '') + lines[i];
+        fieldCount = (currentLine.match(/;/g) || []).length;
+
+        // nel tuo CSV originale si arrivava ~16 campi
+        if (fieldCount >= 15) {
+          if (!currentLine.trim()) { currentLine = ''; continue; }
+
+          const v = currentLine.split(';').slice(0, 16);
+
+          // P.IVA: se non presente nel CSV, la generiamo (TMP-uuid)
+          const piva = (v[16] || '').trim() || `TMP-${safeUUID()}`;
+
+          companies.push({
+            // id verrà generato dal DB; qui mettiamo solo un id temporaneo per React
+            _tmpId: `tmp_${Date.now()}_${i}_${Math.random().toString(36).slice(2)}`,
+            piva,
+            ragioneSociale: (v[0] || '').trim(),
+            telefono: (v[1] || '').split(/[\s\n]/)[0],
+            indirizzo: `${(v[2]||'').trim()}, ${(v[3]||'').trim()}, ${(v[4]||'').trim()} (${(v[5]||'').trim()})`.trim(),
+            email: (v[6] || '').trim(),
+            sitoWeb: (v[8] || '').trim(),
+            collaboratori: parseInt(v[9]) || 0,
+            dipendenti: parseInt(v[10]) || 0,
+            capitaleSociale: parseFinancialValue(v[11]),
+            valoreProduzione: parseFinancialValue(v[12]),
+            ricavi: parseFinancialValue(v[13]),
+            utileOPerdite: parseFinancialValue(v[14]),
+            settore: (v[15] || '').trim(),
+            titolare: '',
+            stato: (v[7] || '').toLowerCase().includes('non interessa') ? 'Non interessato' :
+                   (v[7] || '').toLowerCase().includes('mail') ? 'Contattato' : 'Nuovo',
+            tagPriorita: 'Nuovo',
+            notaInEvidenza: '',
+            timeline: v[7] ? [{
+              id: `t_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+              data: new Date().toISOString(),
+              tipo: 'nota',
+              testo: `Note da file: ${v[7]}`,
+              operatore: 'Import'
+            }] : [],
+          });
+
+          currentLine = '';
+        }
+      }
+      return companies;
+    };
+
+    /***********************
+     * MAPPING DB <-> UI
+     ************************/
+    const fromDbCompany = (row) => ({
+      id: row.id,
+      piva: row.piva,
+      ragioneSociale: row.ragione_sociale || '',
+      telefono: row.telefono || '',
+      indirizzo: row.indirizzo || '',
+      email: row.email || '',
+      sitoWeb: row.sito_web || '',
+      collaboratori: row.collaboratori || 0,
+      dipendenti: row.dipendenti || 0,
+      capitaleSociale: row.capitale_sociale || 0,
+      valoreProduzione: row.valore_produzione || 0,
+      ricavi: row.ricavi || 0,
+      utileOPerdite: row.utile_o_perdite || 0,
+      settore: row.settore || '',
+      titolare: row.titolare || '',
+      stato: row.stato || 'Nuovo',
+      tagPriorita: row.tag_priorita || 'Nuovo',
+      notaInEvidenza: row.nota_in_evidenza || '',
+      timeline: Array.isArray(row.timeline) ? row.timeline : (row.timeline || []),
+      dataCreazione: row.created_at,
+    });
+
+    const toDbCompany = (c, userId) => ({
+      id: c.id, // può essere undefined per insert
+      user_id: userId,
+      piva: c.piva,
+      ragione_sociale: c.ragioneSociale,
+      telefono: c.telefono,
+      indirizzo: c.indirizzo,
+      email: c.email,
+      sito_web: c.sitoWeb,
+      collaboratori: Number(c.collaboratori || 0),
+      dipendenti: Number(c.dipendenti || 0),
+      capitale_sociale: Number(c.capitaleSociale || 0),
+      valore_produzione: Number(c.valoreProduzione || 0),
+      ricavi: Number(c.ricavi || 0),
+      utile_o_perdite: Number(c.utileOPerdite || 0),
+      settore: c.settore,
+      titolare: c.titolare,
+      stato: c.stato,
+      tag_priorita: c.tagPriorita,
+      nota_in_evidenza: c.notaInEvidenza,
+      timeline: c.timeline || [],
+    });
+
+    /***********************
+     * AUTH UI
+     ************************/
+    const AuthPanel = ({ onAuthed }) => {
+      const [mode, setMode] = useState('login'); // login | signup
+      const [email, setEmail] = useState('');
+      const [password, setPassword] = useState('');
+      const [loading, setLoading] = useState(false);
+      const [msg, setMsg] = useState('');
+
+      const submit = async () => {
+        setMsg('');
+        setLoading(true);
+        try {
+          if (mode === 'signup') {
+            const { data, error } = await supabase.auth.signUp({ email, password });
+            if (error) throw error;
+            setMsg('Registrazione ok. Se hai attivato la conferma email, controlla la posta.');
+          } else {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            onAuthed();
+          }
+        } catch (e) {
+          setMsg(e.message || 'Errore');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen flex items-center justify-center p-4">
+          <div className="bg-white shadow rounded-xl p-6 w-full max-w-md">
+            <h1 className="text-2xl font-bold mb-2">CRM Lead Manager</h1>
+            <p className="text-sm text-gray-600 mb-6">Accesso al database online</p>
+
+            <div className="flex gap-2 mb-4">
+              <button
+                className={`flex-1 px-3 py-2 rounded ${mode==='login'?'bg-blue-600 text-white':'bg-gray-100'}`}
+                onClick={() => setMode('login')}
+              >Login</button>
+              <button
+                className={`flex-1 px-3 py-2 rounded ${mode==='signup'?'bg-blue-600 text-white':'bg-gray-100'}`}
+                onClick={() => setMode('signup')}
+              >Registrati</button>
+            </div>
+
+            <label className="text-sm text-gray-700">Email</label>
+            <input className="border rounded px-3 py-2 w-full mb-3" value={email} onChange={e=>setEmail(e.target.value)} />
+
+            <label className="text-sm text-gray-700">Password</label>
+            <input type="password" className="border rounded px-3 py-2 w-full mb-4" value={password} onChange={e=>setPassword(e.target.value)} />
+
+            <button
+              onClick={submit}
+              disabled={loading || !email || !password}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+            >
+              {loading ? '...' : (mode==='login' ? 'Entra' : 'Crea account')}
+            </button>
+
+            {msg && <div className="mt-4 text-sm bg-yellow-50 border border-yellow-200 rounded p-3 text-yellow-800">{msg}</div>}
+
+            <div className="mt-6 text-xs text-gray-500">
+              Nota: per sicurezza, abilita le policy RLS in Supabase come da guida.
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    /***********************
+     * APP
+     ************************/
+    const CRMLeadManager = () => {
+      const [session, setSession] = useState(null);
+      const [loadingApp, setLoadingApp] = useState(true);
+
+      const [companies, setCompanies] = useState([]);
+      const [selectedCompanies, setSelectedCompanies] = useState([]);
+      const [currentView, setCurrentView] = useState('dashboard'); // dashboard | companies | detail | settings-stati
+      const [selectedCompanyId, setSelectedCompanyId] = useState(null);
+      const [searchTerm, setSearchTerm] = useState('');
+      const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+      const [statiPersonalizzati, setStatiPersonalizzati] = useState(['Nuovo','Da contattare','Contattato','In trattativa','Acquisito','Non interessato']);
+      const [newStatoName, setNewStatoName] = useState('');
+      const [showNewStatoInput, setShowNewStatoInput] = useState(false);
+
+      // note/timeline UI
+      const [showNoteInput, setShowNoteInput] = useState(false);
+      const [newNoteText, setNewNoteText] = useState('');
+      const [editingNote, setEditingNote] = useState(null);
+      const [deletingNote, setDeletingNote] = useState(null);
+      const [draggedNoteIndex, setDraggedNoteIndex] = useState(null);
+
+      // voce
+      const [isListening, setIsListening] = useState(false);
+      const recognitionRef = useRef(null);
+
+      const userId = session?.user?.id || null;
+
+      const selectedCompany = useMemo(
+        () => companies.find(c => c.id === selectedCompanyId) || null,
+        [companies, selectedCompanyId]
+      );
+
+      const filtered = useMemo(() => {
+        const t = searchTerm.trim().toLowerCase();
+        if (!t) return companies;
+        return companies.filter(c =>
+          (c.ragioneSociale || '').toLowerCase().includes(t) ||
+          (c.piva || '').toLowerCase().includes(t) ||
+          (c.email || '').toLowerCase().includes(t) ||
+          (c.telefono || '').toLowerCase().includes(t) ||
+          (c.settore || '').toLowerCase().includes(t)
+        );
+      }, [companies, searchTerm]);
+
+      /***************
+       * AUTH bootstrap
+       ***************/
+      useEffect(() => {
+        (async () => {
+          const { data } = await supabase.auth.getSession();
+          setSession(data.session);
+          setLoadingApp(false);
+        })();
+
+        const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+          setSession(newSession);
+        });
+
+        return () => { sub.subscription.unsubscribe(); };
+      }, []);
+
+      const signOut = async () => {
+        await supabase.auth.signOut();
+        setCompanies([]);
+        setSelectedCompanies([]);
+        setSelectedCompanyId(null);
+        setCurrentView('dashboard');
+      };
+
+      /***************
+       * LOAD data
+       ***************/
+      const loadStati = async () => {
+        const { data, error } = await supabase
+          .from('stati')
+          .select('*')
+          .eq('user_id', userId)
+          .order('ordine', { ascending: true });
+
+        if (error) throw error;
+
+        if (!data || data.length === 0) {
+          // primo avvio: inseriamo default
+          const defaults = ['Nuovo','Da contattare','Contattato','In trattativa','Acquisito','Non interessato'];
+          const rows = defaults.map((nome, idx) => ({ user_id: userId, nome, ordine: idx+1 }));
+          const ins = await supabase.from('stati').insert(rows);
+          if (ins.error) throw ins.error;
+          setStatiPersonalizzati(defaults);
+          return;
+        }
+        setStatiPersonalizzati(data.map(r => r.nome));
+      };
+
+      const loadCompanies = async () => {
+        const { data, error } = await supabase
+          .from('companies')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        setCompanies((data || []).map(fromDbCompany));
+      };
+
+      useEffect(() => {
+        if (!userId) return;
+        (async () => {
+          try {
+            setLoadingApp(true);
+            await loadStati();
+            await loadCompanies();
+          } catch (e) {
+            alert(`Errore caricamento dati: ${e.message || e}`);
+          } finally {
+            setLoadingApp(false);
+          }
+        })();
+      }, [userId]);
+
+      /***************
+       * SAVE helpers
+       ***************/
+      const saveCompany = async (company) => {
+        // upsert su (user_id, piva)
+        const payload = toDbCompany(company, userId);
+        const { data, error } = await supabase
+          .from('companies')
+          .upsert(payload, { onConflict: 'user_id,piva' })
+          .select('*')
+          .single();
+
+        if (error) throw error;
+
+        const saved = fromDbCompany(data);
+        setCompanies(prev => {
+          const idx = prev.findIndex(x => x.id === saved.id);
+          if (idx >= 0) {
+            const copy = [...prev];
+            copy[idx] = saved;
+            return copy;
+          }
+          // se era nuovo (senza id) lo aggiungiamo in testa
+          return [saved, ...prev];
+        });
+        return saved;
+      };
+
+      const deleteCompanies = async (ids) => {
+        const { error } = await supabase
+          .from('companies')
+          .delete()
+          .in('id', ids)
+          .eq('user_id', userId);
+
+        if (error) throw error;
+
+        setCompanies(prev => prev.filter(c => !ids.includes(c.id)));
+        setSelectedCompanies([]);
+        setShowDeleteConfirm(false);
+      };
+
+      /***************
+       * CSV import
+       ***************/
+      const handleCSVImport = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        try {
+          const text = await file.text();
+          const parsed = parseCSVData(text);
+
+          // normalizziamo: se P.IVA mancante -> già TMP-uuid
+          // e assicuriamo che piva ci sia sempre
+          const toInsert = parsed.map(c => ({
+            ...c,
+            piva: c.piva || `TMP-${safeUUID()}`
+          }));
+
+          // upsert in bulk
+          const payload = toInsert.map(c => toDbCompany(c, userId));
+          const { data, error } = await supabase
+            .from('companies')
+            .upsert(payload, { onConflict: 'user_id,piva' })
+            .select('*');
+
+          if (error) throw error;
+
+          const mapped = (data || []).map(fromDbCompany);
+          // ricarico elenco per ordine pulito
+          await loadCompanies();
+
+          alert(`Import completato: ${mapped.length} record inseriti/aggiornati`);
+        } catch (err) {
+          alert(`Errore import CSV: ${err.message || err}`);
+        } finally {
+          e.target.value = '';
+        }
+      };
+
+      /***************
+       * Voice
+       ***************/
+      useEffect(() => {
+        if (!userId) return;
+        if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) return;
+
+        const SR = window.webkitSpeechRecognition || window.SpeechRecognition;
+        const rec = new SR();
+        rec.continuous = false;
+        rec.lang = 'it-IT';
+
+        rec.onresult = (e) => {
+          const transcript = e.results[0][0].transcript;
+          processVoiceCommand(transcript);
+        };
+        rec.onend = () => setIsListening(false);
+        rec.onerror = (e) => {
+          setIsListening(false);
+          alert(`Errore riconoscimento vocale: ${e.error}`);
+        };
+
+        recognitionRef.current = rec;
+      }, [userId, selectedCompanyId, selectedCompanies, currentView, companies]);
+
+      const toggleMicrophone = () => {
+        if (!recognitionRef.current) {
+          alert('Riconoscimento vocale non disponibile su questo dispositivo/browser.');
+          return;
+        }
+        if (isListening) {
+          try { recognitionRef.current.stop(); } catch {}
+          setIsListening(false);
+        } else {
+          try { recognitionRef.current.start(); setIsListening(true); } catch (e) {
+            alert('Impossibile avviare microfono. Prova in HTTPS e concedi i permessi.');
+          }
+        }
+      };
+
+      const processVoiceCommand = async (cmd) => {
+        const lower = String(cmd || '').toLowerCase();
+        const targets = (selectedCompanyId && currentView === 'detail') ? [selectedCompanyId] : selectedCompanies;
+
+        if (targets.length === 0) {
+          alert('Nessuna azienda selezionata');
+          return;
+        }
+
+        for (const id of targets) {
+          const c = companies.find(x => x.id === id);
+          if (!c) continue;
+
+          let updated = { ...c };
+
+          if (lower.includes('aggiungi nota')) {
+            const nota = lower.split('aggiungi nota')[1]?.split(/,|e poi|inoltre/)[0]?.trim()?.replace(/^:\s*/, '') || '';
+            if (nota) {
+              updated.timeline = [{
+                id: `t_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                data: new Date().toISOString(),
+                tipo: 'nota',
+                testo: nota,
+                operatore: 'Voce'
+              }, ...(updated.timeline || [])];
+            }
+          }
+
+          if (lower.includes('nota in evidenza')) {
+            const nota = lower.split('nota in evidenza')[1]?.split(/,|e poi|inoltre/)[0]?.trim()?.replace(/^:\s*/, '') || '';
+            if (nota) updated.notaInEvidenza = nota;
+          }
+
+          // stato: "imposta stato contattato"
+          if (lower.includes('imposta stato')) {
+            const s = lower.split('imposta stato')[1]?.trim() || '';
+            const match = statiPersonalizzati.find(x => x.toLowerCase() === s.toLowerCase());
+            if (match) updated.stato = match;
+          }
+
+          try {
+            await saveCompany(updated);
+          } catch (e) {
+            alert(`Errore salvataggio (voce): ${e.message || e}`);
+          }
+        }
+      };
+
+      /***************
+       * Stati: salva ordine su DB
+       ***************/
+      const persistStati = async (newList) => {
+        setStatiPersonalizzati(newList);
+        const rows = newList.map((nome, idx) => ({ user_id: userId, nome, ordine: idx+1 }));
+        // strategia semplice: cancello e reinserisco
+        const del = await supabase.from('stati').delete().eq('user_id', userId);
+        if (del.error) throw del.error;
+        const ins = await supabase.from('stati').insert(rows);
+        if (ins.error) throw ins.error;
+      };
+
+      /***************
+       * UI actions
+       ***************/
+      const openDetail = (c) => {
+        setSelectedCompanyId(c.id);
+        setCurrentView('detail');
+        setShowNoteInput(false);
+        setEditingNote(null);
+        setDeletingNote(null);
+        setNewNoteText('');
+      };
+
+      const updateSelectedCompanyLocal = (patch) => {
+        if (!selectedCompany) return;
+        setCompanies(prev => prev.map(c => c.id === selectedCompany.id ? { ...c, ...patch } : c));
+      };
+
+      const saveSelectedCompany = async () => {
+        if (!selectedCompany) return;
+        try {
+          await saveCompany(selectedCompany);
+        } catch (e) {
+          alert(`Errore salvataggio: ${e.message || e}`);
+        }
+      };
+
+      if (loadingApp) {
+        return (
+          <div className="min-h-screen flex items-center justify-center text-gray-600">
+            Caricamento...
+          </div>
+        );
+      }
+
+      if (!session) {
+        return <AuthPanel onAuthed={() => {}} />;
+      }
+
+      return (
+        <div className="min-h-screen">
+          <header className="bg-white shadow-sm">
+            <div className="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center gap-4">
+              <div>
+                <h1 className="text-2xl font-bold">CRM Lead Manager</h1>
+                <div className="text-xs text-gray-500">DB online • Utente: {session.user.email}</div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {isListening && (
+                  <div className="flex items-center gap-2 bg-red-50 px-3 py-2 rounded">
+                    <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                    <span className="text-sm text-red-700">🎤 In ascolto...</span>
+                  </div>
+                )}
+                <button onClick={signOut} className="bg-gray-800 text-white px-3 py-2 rounded text-sm">Esci</button>
+              </div>
+            </div>
+          </header>
+
+          <nav className="bg-white border-b">
+            <div className="max-w-7xl mx-auto px-4 flex gap-1 overflow-x-auto">
+              <button onClick={() => setCurrentView('dashboard')}
+                className={`px-4 py-3 border-b-2 whitespace-nowrap ${currentView === 'dashboard' ? 'border-blue-500 text-blue-600' : 'border-transparent'}`}>
+                Dashboard
+              </button>
+              <button onClick={() => setCurrentView('companies')}
+                className={`px-4 py-3 border-b-2 whitespace-nowrap ${['companies','detail'].includes(currentView) ? 'border-blue-500 text-blue-600' : 'border-transparent'}`}>
+                Aziende
+              </button>
+              <button onClick={() => setCurrentView('settings-stati')}
+                className={`px-4 py-3 border-b-2 whitespace-nowrap ${currentView === 'settings-stati' ? 'border-blue-500 text-blue-600' : 'border-transparent'}`}>
+                Gestione Stati
+              </button>
+            </div>
+          </nav>
+
+          <main className="max-w-7xl mx-auto">
+            {currentView === 'dashboard' && (
+              <div className="p-4 sm:p-6">
+                <h2 className="text-2xl font-bold mb-6">Dashboard</h2>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                  <div className="bg-white p-5 rounded shadow">
+                    <p className="text-gray-500 text-sm">Totale Aziende</p>
+                    <p className="text-3xl font-bold">{companies.length}</p>
+                  </div>
+                  <div className="bg-white p-5 rounded shadow">
+                    <p className="text-gray-500 text-sm">Da Contattare</p>
+                    <p className="text-3xl font-bold">{companies.filter(c => c.stato === 'Nuovo' || c.stato === 'Da contattare').length}</p>
+                  </div>
+                  <div className="bg-white p-5 rounded shadow">
+                    <p className="text-gray-500 text-sm">Contattati</p>
+                    <p className="text-3xl font-bold">{companies.filter(c => c.stato === 'Contattato').length}</p>
+                  </div>
+                  <div className="bg-white p-5 rounded shadow">
+                    <p className="text-gray-500 text-sm">Acquisiti</p>
+                    <p className="text-3xl font-bold">{companies.filter(c => c.stato === 'Acquisito').length}</p>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded p-5">
+                  <h3 className="font-bold text-blue-800 mb-1">✅ Dati online</h3>
+                  <p className="text-blue-700 text-sm">
+                    I dati sono salvati su database Supabase (non in locale).
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {currentView === 'companies' && (
+              <div className="p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+                  <h2 className="text-2xl font-bold">Aziende</h2>
+
+                  <div className="flex flex-wrap gap-2">
+                    {selectedCompanies.length > 0 && !showDeleteConfirm && (
+                      <button onClick={() => setShowDeleteConfirm(true)}
+                        className="bg-red-500 text-white px-4 py-2 rounded">
+                        🗑️ Cancella ({selectedCompanies.length})
+                      </button>
+                    )}
+
+                    {showDeleteConfirm && (
+                      <div className="flex flex-wrap gap-2 items-center bg-red-50 border-2 border-red-500 px-4 py-2 rounded">
+                        <span className="text-red-800 font-semibold">Confermi {selectedCompanies.length}?</span>
+                        <button onClick={() => deleteCompanies(selectedCompanies)}
+                          className="bg-red-600 text-white px-3 py-1 rounded font-bold">SÌ</button>
+                        <button onClick={() => setShowDeleteConfirm(false)}
+                          className="bg-gray-600 text-white px-3 py-1 rounded">NO</button>
+                      </div>
+                    )}
+
+                    <label className="bg-blue-600 text-white px-4 py-2 rounded cursor-pointer">
+                      📤 Importa CSV
+                      <input type="file" accept=".csv" onChange={handleCSVImport} className="hidden" />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded shadow p-4 mb-4">
+                  <input
+                    type="text"
+                    placeholder="Cerca (ragione sociale, P.IVA, email, telefono, settore)..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="border rounded px-3 py-2 w-full"
+                  />
+                </div>
+
+                {selectedCompanies.length > 0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded p-4 mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
+                    <span className="font-semibold">{selectedCompanies.length} selezionate</span>
+                    <button onClick={toggleMicrophone}
+                      className={`px-3 py-2 rounded ${isListening ? 'bg-red-500' : 'bg-blue-600'} text-white`}>
+                      🎤 {isListening ? 'Stop' : 'Voce'}
+                    </button>
+                  </div>
+                )}
+
+                <div className="bg-white rounded shadow overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="min-w-[920px] w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="p-3 text-left w-10">
+                            <input
+                              type="checkbox"
+                              checked={selectedCompanies.length === filtered.length && filtered.length > 0}
+                              onChange={(e) => setSelectedCompanies(e.target.checked ? filtered.map(c => c.id) : [])}
+                            />
+                          </th>
+                          <th className="p-3 text-left">Azienda</th>
+                          <th className="p-3 text-left">P.IVA</th>
+                          <th className="p-3 text-left">Stato</th>
+                          <th className="p-3 text-left">Ricavi</th>
+                          <th className="p-3 text-left">Azioni</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.map(c => (
+                          <tr key={c.id} className="border-t hover:bg-gray-50">
+                            <td className="p-3">
+                              <input
+                                type="checkbox"
+                                checked={selectedCompanies.includes(c.id)}
+                                onChange={(e) => setSelectedCompanies(
+                                  e.target.checked ? [...selectedCompanies, c.id] : selectedCompanies.filter(id => id !== c.id)
+                                )}
+                              />
+                            </td>
+                            <td className="p-3">
+                              <div>
+                                <p className="font-semibold">{c.ragioneSociale}</p>
+                                {c.notaInEvidenza && <p className="text-sm text-orange-600">⭐ {c.notaInEvidenza}</p>}
+                                <p className="text-xs text-gray-500">{c.telefono}</p>
+                              </div>
+                            </td>
+                            <td className="p-3 text-sm font-mono">{c.piva}</td>
+                            <td className="p-3">
+                              <span className={`px-2 py-1 rounded text-xs ${
+                                c.stato === 'Acquisito' ? 'bg-green-100 text-green-800' :
+                                c.stato === 'Contattato' ? 'bg-blue-100 text-blue-800' :
+                                c.stato === 'Non interessato' ? 'bg-red-100 text-red-800' : 'bg-gray-100'
+                              }`}>{c.stato}</span>
+                            </td>
+                            <td className="p-3 text-sm">{formatCurrency(c.ricavi)}</td>
+                            <td className="p-3">
+                              <button onClick={() => openDetail(c)} className="text-blue-600 hover:underline text-sm">
+                                Dettagli
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {filtered.length === 0 && (
+                          <tr>
+                            <td colSpan="6" className="p-6 text-center text-gray-500">Nessun risultato</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {currentView === 'detail' && selectedCompany && (
+              <div className="p-4 sm:p-6">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-6">
+                  <button onClick={() => { setCurrentView('companies'); setSelectedCompanyId(null); }}
+                    className="text-blue-600 hover:underline">← Torna alla lista</button>
+
+                  <div className="flex gap-2">
+                    <button onClick={toggleMicrophone}
+                      className={`px-4 py-2 rounded ${isListening ? 'bg-red-500' : 'bg-blue-600'} text-white`}>
+                      🎤 {isListening ? 'Stop' : 'Comando Vocale'}
+                    </button>
+                    <button onClick={saveSelectedCompany} className="bg-green-600 text-white px-4 py-2 rounded">
+                      💾 Salva
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded shadow p-5 mb-6">
+                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl font-bold mb-1">{selectedCompany.ragioneSociale}</h2>
+                      <div className="text-sm text-gray-600">P.IVA: <span className="font-mono">{selectedCompany.piva}</span></div>
+                    </div>
+                    <div className="w-full lg:w-80">
+                      <label className="text-sm text-gray-600 block mb-1">Stato</label>
+                      <select
+                        value={selectedCompany.stato}
+                        onChange={(e) => {
+                          if (e.target.value === '__new__') setShowNewStatoInput(true);
+                          else updateSelectedCompanyLocal({ stato: e.target.value });
+                        }}
+                        className="border rounded px-3 py-2 w-full"
+                      >
+                        {statiPersonalizzati.map(s => <option key={s} value={s}>{s}</option>)}
+                        <option value="__new__">+ Aggiungi nuovo stato</option>
+                      </select>
+
+                      {showNewStatoInput && (
+                        <div className="mt-2 p-3 border rounded bg-gray-50">
+                          <input
+                            type="text"
+                            value={newStatoName}
+                            onChange={(e) => setNewStatoName(e.target.value)}
+                            placeholder="Nome nuovo stato..."
+                            className="border rounded px-3 py-2 w-full mb-2"
+                            autoFocus
+                          />
+                          <div className="flex gap-2">
+                            <button onClick={async () => {
+                              const name = newStatoName.trim();
+                              if (!name) return;
+                              try {
+                                const newList = [...statiPersonalizzati, name];
+                                await persistStati(newList);
+                                updateSelectedCompanyLocal({ stato: name });
+                                setNewStatoName('');
+                                setShowNewStatoInput(false);
+                              } catch (e) {
+                                alert(`Errore stati: ${e.message || e}`);
+                              }
+                            }} className="bg-green-600 text-white px-3 py-1 rounded text-sm">Aggiungi</button>
+                            <button onClick={() => { setNewStatoName(''); setShowNewStatoInput(false); }}
+                              className="bg-gray-600 text-white px-3 py-1 rounded text-sm">Annulla</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {selectedCompany.notaInEvidenza && (
+                    <div className="mt-4 bg-orange-50 border border-orange-200 rounded p-3">
+                      <div className="font-semibold text-orange-800">⭐ {selectedCompany.notaInEvidenza}</div>
+                    </div>
+                  )}
+
+                  <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    <div>
+                      <h3 className="font-semibold mb-3">Contatti</h3>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center gap-2">📞
+                          <input className="border rounded px-2 py-1 w-full" value={selectedCompany.telefono}
+                            onChange={e=>updateSelectedCompanyLocal({ telefono: e.target.value })} />
+                        </div>
+                        <div className="flex items-center gap-2">✉️
+                          <input className="border rounded px-2 py-1 w-full" value={selectedCompany.email}
+                            onChange={e=>updateSelectedCompanyLocal({ email: e.target.value })} />
+                        </div>
+                        <div className="flex items-center gap-2">🌐
+                          <input className="border rounded px-2 py-1 w-full" value={selectedCompany.sitoWeb}
+                            onChange={e=>updateSelectedCompanyLocal({ sitoWeb: e.target.value })} />
+                        </div>
+                        <div className="flex items-start gap-2">📍
+                          <textarea className="border rounded px-2 py-1 w-full" rows="2" value={selectedCompany.indirizzo}
+                            onChange={e=>updateSelectedCompanyLocal({ indirizzo: e.target.value })} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h3 className="font-semibold mb-3">Economici</h3>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between"><span className="text-gray-600">Capitale Sociale</span><span className="font-semibold">{formatCurrency(selectedCompany.capitaleSociale)}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Valore Produzione</span><span className="font-semibold">{formatCurrency(selectedCompany.valoreProduzione)}</span></div>
+                        <div className="flex justify-between"><span className="text-gray-600">Ricavi</span><span className="font-semibold">{formatCurrency(selectedCompany.ricavi)}</span></div>
+                        <div className="flex justify-between">
+                          <span className="text-gray-600">Utile/Perdite</span>
+                          <span className={`font-semibold ${selectedCompany.utileOPerdite >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                            {formatCurrency(selectedCompany.utileOPerdite)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <label className="text-gray-600">Dipendenti</label>
+                          <input className="border rounded px-2 py-1 w-full" value={selectedCompany.dipendenti}
+                            onChange={e=>updateSelectedCompanyLocal({ dipendenti: parseInt(e.target.value||'0')||0 })} />
+                        </div>
+                        <div>
+                          <label className="text-gray-600">Collaboratori</label>
+                          <input className="border rounded px-2 py-1 w-full" value={selectedCompany.collaboratori}
+                            onChange={e=>updateSelectedCompanyLocal({ collaboratori: parseInt(e.target.value||'0')||0 })} />
+                        </div>
+                      </div>
+
+                      <div className="mt-4 text-sm">
+                        <label className="text-gray-600">Settore</label>
+                        <input className="border rounded px-2 py-1 w-full" value={selectedCompany.settore}
+                          onChange={e=>updateSelectedCompanyLocal({ settore: e.target.value })} />
+                      </div>
+
+                      <div className="mt-4 text-sm">
+                        <label className="text-gray-600">Nota in evidenza</label>
+                        <input className="border rounded px-2 py-1 w-full" value={selectedCompany.notaInEvidenza}
+                          onChange={e=>updateSelectedCompanyLocal({ notaInEvidenza: e.target.value })} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded shadow p-5">
+                  <h3 className="text-xl font-bold mb-4">Timeline Interazioni</h3>
+
+                  <div className="space-y-3">
+                    {(selectedCompany.timeline || []).map((t, idx) => (
+                      <div key={t.id}
+                        className={`border-l-4 border-blue-600 pl-4 py-2 ${draggedNoteIndex === idx ? 'opacity-50' : ''} ${deletingNote === t.id ? 'bg-red-50' : ''}`}
+                        draggable={editingNote !== t.id}
+                        onDragStart={() => setDraggedNoteIndex(idx)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => {
+                          if (draggedNoteIndex !== null && draggedNoteIndex !== idx) {
+                            const newTimeline = [...(selectedCompany.timeline || [])];
+                            const [draggedItem] = newTimeline.splice(draggedNoteIndex, 1);
+                            newTimeline.splice(idx, 0, draggedItem);
+                            updateSelectedCompanyLocal({ timeline: newTimeline });
+                          }
+                          setDraggedNoteIndex(null);
+                        }}
+                        onDragEnd={() => setDraggedNoteIndex(null)}
+                      >
+                        {deletingNote === t.id ? (
+                          <div className="flex items-center justify-between p-2">
+                            <span className="text-red-800 font-semibold">Confermi eliminazione?</span>
+                            <div className="flex gap-2">
+                              <button onClick={() => {
+                                const newTimeline = (selectedCompany.timeline || []).filter(tn => tn.id !== t.id);
+                                updateSelectedCompanyLocal({ timeline: newTimeline });
+                                setDeletingNote(null);
+                              }} className="bg-red-600 text-white px-3 py-1 rounded text-sm font-bold">SÌ</button>
+                              <button onClick={() => setDeletingNote(null)} className="bg-gray-600 text-white px-3 py-1 rounded text-sm">NO</button>
+                            </div>
+                          </div>
+                        ) : editingNote === t.id ? (
+                          <div>
+                            <textarea value={newNoteText} onChange={(e) => setNewNoteText(e.target.value)}
+                              className="w-full border rounded px-3 py-2 mb-2" rows="3" autoFocus />
+                            <div className="flex gap-2">
+                              <button onClick={() => {
+                                const newTimeline = (selectedCompany.timeline || []).map(tn => tn.id === t.id ? { ...tn, testo: newNoteText } : tn);
+                                updateSelectedCompanyLocal({ timeline: newTimeline });
+                                setEditingNote(null);
+                                setNewNoteText('');
+                              }} className="bg-green-600 text-white px-3 py-1 rounded text-sm">Salva</button>
+                              <button onClick={() => { setEditingNote(null); setNewNoteText(''); }} className="bg-gray-600 text-white px-3 py-1 rounded text-sm">Annulla</button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="flex justify-between mb-1">
+                              <div className="flex items-center gap-2">
+                                <span className="cursor-move text-gray-400" title="Trascina per riordinare">⋮⋮</span>
+                                <span className="text-xs px-2 py-1 bg-gray-100 rounded">{t.tipo}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-gray-500">{formatDateTime(t.data)}</span>
+                                <button onClick={() => { setEditingNote(t.id); setNewNoteText(t.testo); }}
+                                  className="text-blue-700 text-xs" title="Modifica">✏️</button>
+                                <button onClick={() => setDeletingNote(t.id)}
+                                  className="text-red-700 text-xs" title="Elimina">🗑️</button>
+                              </div>
+                            </div>
+                            <p className="text-sm">{t.testo}</p>
+                          </>
+                        )}
+                      </div>
+                    ))}
+                    {(selectedCompany.timeline || []).length === 0 && (
+                      <div className="text-sm text-gray-500">Nessuna interazione registrata.</div>
+                    )}
+                  </div>
+
+                  {!showNoteInput ? (
+                    <button onClick={() => setShowNoteInput(true)} className="bg-blue-600 text-white px-4 py-2 rounded mt-4">
+                      ➕ Aggiungi Nota
+                    </button>
+                  ) : (
+                    <div className="mt-4 border rounded p-4 bg-gray-50">
+                      <textarea value={newNoteText} onChange={(e) => setNewNoteText(e.target.value)}
+                        placeholder="Scrivi la nota..." className="w-full border rounded px-3 py-2 mb-2" rows="3" autoFocus />
+                      <div className="flex gap-2">
+                        <button onClick={() => {
+                          if (newNoteText.trim()) {
+                            const entry = {
+                              id: `t_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+                              data: new Date().toISOString(),
+                              tipo: 'nota',
+                              testo: newNoteText,
+                              operatore: 'Utente'
+                            };
+                            updateSelectedCompanyLocal({ timeline: [entry, ...(selectedCompany.timeline || [])] });
+                            setNewNoteText('');
+                            setShowNoteInput(false);
+                          }
+                        }} className="bg-green-600 text-white px-4 py-2 rounded">Salva</button>
+                        <button onClick={() => { setNewNoteText(''); setShowNoteInput(false); }} className="bg-gray-600 text-white px-4 py-2 rounded">Annulla</button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 text-xs text-gray-500">
+                    Nota: dopo modifiche su Timeline/Contatti/Evidenza clicca “Salva”.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {currentView === 'settings-stati' && (
+              <div className="p-4 sm:p-6">
+                <h2 className="text-2xl font-bold mb-6">Gestione Stati</h2>
+                <div className="bg-white rounded shadow p-6">
+                  <p className="text-sm text-gray-600 mb-4">Riordina gli stati usando le frecce. L'ordine determina la priorità.</p>
+
+                  <div className="space-y-2">
+                    {statiPersonalizzati.map((stato, idx) => (
+                      <div key={stato} className="flex items-center justify-between border rounded p-3 bg-gray-50">
+                        <span className="font-semibold">{idx + 1}. {stato}</span>
+                        <div className="flex gap-2">
+                          {idx > 0 && (
+                            <button onClick={async () => {
+                              try {
+                                const newList = [...statiPersonalizzati];
+                                [newList[idx], newList[idx-1]] = [newList[idx-1], newList[idx]];
+                                await persistStati(newList);
+                              } catch (e) { alert(`Errore: ${e.message || e}`); }
+                            }} className="bg-blue-600 text-white px-2 py-1 rounded text-sm">↑</button>
+                          )}
+                          {idx < statiPersonalizzati.length - 1 && (
+                            <button onClick={async () => {
+                              try {
+                                const newList = [...statiPersonalizzati];
+                                [newList[idx], newList[idx+1]] = [newList[idx+1], newList[idx]];
+                                await persistStati(newList);
+                              } catch (e) { alert(`Errore: ${e.message || e}`); }
+                            }} className="bg-blue-600 text-white px-2 py-1 rounded text-sm">↓</button>
+                          )}
+                          <button onClick={async () => {
+                            if (!confirm(`Eliminare lo stato "${stato}"?`)) return;
+                            try {
+                              const newList = statiPersonalizzati.filter(s => s !== stato);
+                              await persistStati(newList);
+                            } catch (e) { alert(`Errore: ${e.message || e}`); }
+                          }} className="bg-red-600 text-white px-2 py-1 rounded text-sm">Elimina</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-6">
+                    <h3 className="font-semibold mb-2">Aggiungi Nuovo Stato</h3>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={newStatoName}
+                        onChange={(e) => setNewStatoName(e.target.value)}
+                        placeholder="Nome stato..."
+                        className="border rounded px-3 py-2 flex-1"
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter') {
+                            const name = newStatoName.trim();
+                            if (!name) return;
+                            try {
+                              const newList = [...statiPersonalizzati, name];
+                              await persistStati(newList);
+                              setNewStatoName('');
+                            } catch (err) { alert(`Errore: ${err.message || err}`); }
+                          }
+                        }}
+                      />
+                      <button onClick={async () => {
+                        const name = newStatoName.trim();
+                        if (!name) return;
+                        try {
+                          const newList = [...statiPersonalizzati, name];
+                          await persistStati(newList);
+                          setNewStatoName('');
+                        } catch (err) { alert(`Errore: ${err.message || err}`); }
+                      }} className="bg-green-600 text-white px-4 py-2 rounded">Aggiungi</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    };
+
+    // Mount React 18
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<CRMLeadManager />);
+  </script>
+</body>
+</html>
