@@ -338,7 +338,16 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
       // voce
       const [isListening, setIsListening] = useState(false);
       const [voiceReview, setVoiceReview] = useState({ open: false, summary: '', updated: [], working: false });
+      const [toast, setToast] = useState(null); // {type:'info'|'error'|'success', text:string}
+
       const recognitionRef = useRef(null);
+
+      const notify = (type, text) => {
+        setToast({ type, text });
+        // auto-hide
+        setTimeout(() => setToast(null), 4000);
+      };
+
 
       const userId = session?.user?.id || null;
 
@@ -632,7 +641,7 @@ const handleCSVImport = async (e) => {
           setIsListening(false);
         } else {
           try { recognitionRef.current.start(); setIsListening(true); } catch (e) {
-            alert('Impossibile avviare microfono. Prova in HTTPS e concedi i permessi.');
+            notify('error', 'Impossibile avviare il microfono. Usa HTTPS e concedi i permessi al browser.');
           }
         }
       };
@@ -695,13 +704,13 @@ const handleCSVImport = async (e) => {
 
         const statusMatched = statoWanted ? matchStatus(statoWanted) : null;
         if (statoWanted && !statusMatched) {
-          alert(`Stato non riconosciuto: "${statoWanted}". Vai in Impostazioni → Gestione Stati per vedere gli stati disponibili.`);
+          notify('error', `Stato non riconosciuto: "${statoWanted}". Vai in Impostazioni → Gestione Stati per vedere gli stati disponibili.`);
           return;
         }
 
         const hasAnyAction = (noteText && noteText.length) || (evidenzaText && evidenzaText.length) || statusMatched;
         if (!hasAnyAction) {
-          alert('Comando vocale non riconosciuto. Esempi: "aggiungi nota ...", "evidenza ...", "imposta stato Contattato".');
+          notify('info', 'Comando vocale non riconosciuto. Esempi: "aggiungi nota ...", "evidenza ...", "imposta stato Contattato".');
           return;
         }
 
@@ -1327,8 +1336,7 @@ ${namesPreview}${more}
                   </div>
                 </div>
               </div>
-            )}
-
+            
             {currentView === 'voice-help' && (
               <div className="p-4 sm:p-6">
                 <h2 className="text-2xl font-bold mb-6">Comandi vocali</h2>
@@ -1405,7 +1413,7 @@ ${namesPreview}${more}
                       }
                       alert('Modifiche salvate.');
                     } catch (err) {
-                      alert(`Errore salvataggio modifiche: ${err.message || err}`);
+                      notify('error', `Errore salvataggio modifiche: ${err.message || err}`);
                     } finally {
                       setVoiceReview({ open: false, summary: '', updated: [], working: false });
                     }
@@ -1418,6 +1426,21 @@ ${namesPreview}${more}
             </div>
           </div>
         )}
+
+          {toast && (
+            <div className="fixed bottom-4 right-4 z-50 max-w-sm">
+              <div className={
+                "rounded-lg shadow-lg border px-4 py-3 text-sm " +
+                (toast.type === 'error'
+                  ? "bg-red-50 border-red-200 text-red-800"
+                  : toast.type === 'success'
+                    ? "bg-green-50 border-green-200 text-green-800"
+                    : "bg-blue-50 border-blue-200 text-blue-800")
+              }>
+                {toast.text}
+              </div>
+            </div>
+          )}
 
           </main>
         </div>
