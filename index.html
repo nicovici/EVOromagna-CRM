@@ -739,8 +739,9 @@ const handleCSVImport = async (e) => {
 
         // Riepilogo leggibile
         const namesPreview = updatedCompanies.slice(0, 8).map(c => `• ${c.ragioneSociale}`).join('\n');
-        const more = updatedCompanies.length > 8 ? `
-…e altre ${updatedCompanies.length - 8}` : '';
+        const more = updatedCompanies.length > 8
+  ? `\n…e altre ${updatedCompanies.length - 8}`
+  : '';
 
         const actions = [];
         if (noteText && noteText.length) actions.push(`Aggiunge NOTA: "${noteText}"`);
