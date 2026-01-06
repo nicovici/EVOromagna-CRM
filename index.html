@@ -475,110 +475,126 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
         setShowDeleteConfirm(false);
       };
 
-      /***************
-       * CSV import
-       ***************/
-            const handleCSVImport = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+/***************
+ * CSV import
+ ***************/
+const handleCSVImport = async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
 
-        try {
-          if (!userId) throw new Error('Devi essere loggato per importare.');
+  try {
+    if (!userId) throw new Error('Devi essere loggato per importare.');
 
-          const text = await file.text();
-          const parsed = parseCSVData(text);
+    const text = await file.text();
+    const parsed = parseCSVData(text);
 
-          // Validazioni base + normalizzazioni
-          const problems = [];
-          const candidates = parsed.map((c, idx) => {
-            const piva = (c.piva || '').trim() || `TMP-${safeUUID()}`;
-            const rag = (c.ragioneSociale || '').trim();
+    // Validazioni base + normalizzazioni
+    const problems = [];
+    const candidates = parsed.map((c, idx) => {
+      const piva = (c.piva || '').trim() || `TMP-${safeUUID()}`;
+      const rag = (c.ragioneSociale || '').trim();
 
-            if (!rag) problems.push({ idx, reason: 'Ragione Sociale mancante' });
+      if (!rag) problems.push({ idx, reason: 'Ragione Sociale mancante' });
 
-            return {
-              ...c,
-              piva,
-              ragioneSociale: rag
-            };
-          });
+      return {
+        ...c,
+        piva,
+        ragioneSociale: rag
+      };
+    });
 
-          // Scarta righe invalide (per ora: ragione sociale mancante)
-          const invalidIdx = new Set(problems.map(p => p.idx));
-          const valid = candidates.filter((_, i) => !invalidIdx.has(i));
+    // Scarta righe invalide (per ora: ragione sociale mancante)
+    const invalidIdx = new Set(problems.map(p => p.idx));
+    const valid = candidates.filter((_, i) => !invalidIdx.has(i));
 
-          // Se non c'è nulla di valido, esci
-          if (valid.length === 0) {
-            alert(`Nessun record importabile. Problemi trovati: ${problems.length}`);
-            return;
-          }
+    // Se non c'è nulla di valido, esci
+    if (valid.length === 0) {
+      alert(`Nessun record importabile. Problemi trovati: ${problems.length}`);
+      return;
+    }
 
-          // Pre-check duplicati su DB per PIVA (non sovrascriviamo: saltiamo)
-          const pivas = [...new Set(valid.map(c => c.piva))];
+    // Pre-check duplicati su DB per PIVA (non sovrascriviamo: saltiamo)
+    const pivas = [...new Set(valid.map(c => c.piva))];
 
-          const existing = new Set();
-          const chunkSize = 200; // prudente
-          for (let i = 0; i < pivas.length; i += chunkSize) {
-            const chunk = pivas.slice(i, i + chunkSize);
-            const { data, error } = await supabase
-              .from('companies')
-              .select('piva')
-              .in('piva', chunk);
+    const existing = new Set();
+    const chunkSize = 200; // prudente
+    for (let i = 0; i < pivas.length; i += chunkSize) {
+      const chunk = pivas.slice(i, i + chunkSize);
+      const { data, error } = await supabase
+        .from('companies')
+        .select('piva')
+        .in('piva', chunk);
 
-            if (error) throw error;
-            (data || []).forEach(r => existing.add(r.piva));
-          }
+      if (error) throw error;
+      (data || []).forEach(r => existing.add(r.piva));
+    }
 
-          const toImport = [];
-          let dupCount = 0;
+    const toImport = [];
+    let dupCount = 0;
 
-          valid.forEach(c => {
-            if (existing.has(c.piva)) {
-              dupCount += 1;
-              return; // skip (non sovrascrive)
-            }
-            toImport.push(c);
-          });
+    valid.forEach(c => {
+      if (existing.has(c.piva)) {
+        dupCount += 1;
+        return; // skip (non sovrascrive)
+      }
+      toImport.push(c);
+    });
 
-          const skipInvalid = problems.length;
-          const skipDup = dupCount;
-          const skipTotal = skipInvalid + skipDup;
+    const skipInvalid = problems.length;
+    const skipDup = dupCount;
+    const skipTotal = skipInvalid + skipDup;
 
-          const msg =
-            `Verifica import CSV:\n\n` +
-            `• Record letti: ${parsed.length}\n` +
-            `• Importerà: ${toImport.length}\n` +
-            `• NON importerà: ${skipTotal}\n` +
-            `   - Duplicati PIVA già presenti: ${skipDup}\n` +
-            `   - Righe non valide: ${skipInvalid}\n\n` +
-            `Vuoi procedere con l'importazione?`;
+    const msg =
+      `Verifica import CSV:\n\n` +
+      `• Record letti: ${parsed.length}\n` +
+      `• Importerà: ${toImport.length}\n` +
+      `• NON importerà: ${skipTotal}\n` +
+      `   - Duplicati PIVA già presenti: ${skipDup}\n` +
+      `   - Righe non valide: ${skipInvalid}\n\n` +
+      `Vuoi procedere con l'importazione?`;
 
-          if (!confirm(msg)) return;
+    if (!confirm(msg)) return;
 
-          if (toImport.length === 0) {
-            alert('Nessun record da importare (tutti duplicati o non validi).');
-            return;
-          }
+    if (toImport.length === 0) {
+      alert('Nessun record da importare (tutti duplicati o non validi).');
+      return;
+    }
 
-          const payload = toImport.map(c => toDbCompany(c, userId));
+    // =============== FIX QUI: payload con ID SEMPRE valorizzato ===============
+    // Per evitare l'errore "id null", generiamo SEMPRE un uuid per ogni record importato.
+    // Usiamo crypto.randomUUID() se disponibile, altrimenti safeUUID().
+    const genId = () => (crypto?.randomUUID ? crypto.randomUUID() : safeUUID());
 
-          // Insert puro: non sovrascrive
-          const { data, error } = await supabase
-            .from('companies')
-            .insert(payload)
-            .select('*');
+    const payload = toImport.map(c => {
+      const row = toDbCompany(c, userId);
 
-          if (error) throw error;
+      // IMPORTANTISSIMO:
+      // 1) Non vogliamo MAI inviare id: null
+      // 2) Vogliamo inviare SEMPRE un id pieno in import
+      // Quindi lo forziamo qui.
+      row.id = genId();
 
-          await loadCompanies();
+      return row;
+    });
+    // =======================================================================
 
-          alert(`Import completato: ${toImport.length} inseriti, ${skipTotal} saltati.`);
-        } catch (err) {
-          alert(`Errore import CSV: ${err.message || err}`);
-        } finally {
-          e.target.value = '';
-        }
-      };;
+    // Insert puro: non sovrascrive
+    const { data, error } = await supabase
+      .from('companies')
+      .insert(payload)
+      .select('*');
+
+    if (error) throw error;
+
+    await loadCompanies();
+
+    alert(`Import completato: ${toImport.length} inseriti, ${skipTotal} saltati.`);
+  } catch (err) {
+    alert(`Errore import CSV: ${err.message || err}`);
+  } finally {
+    e.target.value = '';
+  }
+};
 
       /***************
        * Voice
