@@ -108,7 +108,7 @@ const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
       const iSito = idxOf('sitoweb', 'sito', 'website', 'url');
       const iCollab = idxOf('collaboratori', 'collaboratore');
       const iDip = idxOf('dipendenti', 'dipendente');
-      const iCapSoc = idxOf('capitalesociale', 'capitalsociale');
+      const iCapSoc = idxOf('capitalesociale', 'capitalsociale', 'capitale');
       const iValProd = idxOf('valoreproduzione', 'valoreproduz', 'valoreproduzioneannuo');
       const iRicavi = idxOf('ricavi', 'fatturato');
       const iUtile = idxOf('utile', 'utileoperdite', 'utileoperdita', 'perdite');
@@ -1329,7 +1329,8 @@ ${namesPreview}${more}
                   </div>
                 </div>
               </div>
-            
+            )}
+
             {currentView === 'voice-help' && (
               <div className="p-4 sm:p-6">
                 <h2 className="text-2xl font-bold mb-6">Comandi vocali</h2>
