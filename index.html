@@ -739,9 +739,8 @@ const handleCSVImport = async (e) => {
 
         // Riepilogo leggibile
         const namesPreview = updatedCompanies.slice(0, 8).map(c => `• ${c.ragioneSociale}`).join('\n');
-        const more = updatedCompanies.length > 8
-  ? `\n…e altre ${updatedCompanies.length - 8}`
-  : '';
+        const more = updatedCompanies.length > 8 ? `
+…e altre ${updatedCompanies.length - 8}` : '';
 
         const actions = [];
         if (noteText && noteText.length) actions.push(`Aggiunge NOTA: "${noteText}"`);
@@ -1335,12 +1334,13 @@ ${namesPreview}${more}
                   </div>
                 </div>
               </div>
-            
+            )}
+
             {currentView === 'voice-help' && (
               <div className="p-4 sm:p-6">
                 <h2 className="text-2xl font-bold mb-6">Comandi vocali</h2>
                 <div className="bg-white rounded shadow p-6 space-y-4">
-                  <p className="text-gray-700">Puoi parlare dopo aver premuto <b>🎙️ Voce</b>. Il sistema riconosce frasi naturali ma queste sono le più affidabili.</p>
+                  <p className="text-gray-700">Puoi parlare dopo aver premuto <b>🎙️ Voce</b>. Il sistema riconosce frasi “naturali” ma queste sono le più affidabili.</p>
 
                   <div className="overflow-x-auto">
                     <table className="min-w-full text-sm">
