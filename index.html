@@ -738,8 +738,7 @@ const handleCSVImport = async (e) => {
         }).filter(Boolean);
 
         // Riepilogo leggibile
-        const namesPreview = updatedCompanies.slice(0, 8).map(c => `• ${c.ragioneSociale}`).join('
-');
+        const namesPreview = updatedCompanies.slice(0, 8).map(c => `• ${c.ragioneSociale}`).join('\n');
         const more = updatedCompanies.length > 8 ? `
 …e altre ${updatedCompanies.length - 8}` : '';
 
@@ -753,8 +752,7 @@ const handleCSVImport = async (e) => {
 
 ` +
           `Modifiche:
-- ${actions.join('
-- ')}
+- ${actions.join('\n- ')}
 
 ` +
           `Elenco (prime):
