@@ -28,7 +28,7 @@
      * CONFIG SUPABASE
      * Inserisci qui i tuoi valori (ti spiego sotto dove prenderli)
      ************************/
-    const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
+const SUPABASE_URL = "https://xaivhyylabxiisbecwtd.supabase.co";
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhhaXZoeXlsYWJ4aWlzYmVjd3RkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc3MDkxODMsImV4cCI6MjA4MzI4NTE4M30.E9HDphXGGjEAo2pC3r6WgOAWWTmROQt0WRTjfonUnpU";
 
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -79,60 +79,116 @@
     };
 
     // CSV: separatore ';' e prima riga intestazioni
+        // Funzione parsing CSV (dinamica via intestazioni; separatore ';')
     const parseCSVData = (csvText) => {
-      const lines = csvText.split('\n');
+      const lines = csvText.replace(/\r/g, '').split('\n');
+      if (!lines.length) return [];
+
+      const headerRaw = lines[0] || '';
+      const headers = headerRaw.split(';').map(h => (h || '').trim());
+      const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      const idxOf = (...candidates) => {
+        const set = new Set(candidates.map(norm));
+        for (let i = 0; i < headers.length; i++) {
+          if (set.has(norm(headers[i]))) return i;
+        }
+        return -1;
+      };
+
+      // Indici colonne (tolleranti a varianti)
+      const iPiva = idxOf('piva', 'partitaiva', 'vat');
+      const iRag = idxOf('ragionesociale', 'azienda', 'denominazione');
+      const iTel = idxOf('telefono', 'tel', 'cellulare');
+      const iInd = idxOf('indirizzo', 'via', 'street');
+      const iComune = idxOf('comune', 'citta', 'città', 'city');
+      const iCap = idxOf('cap', 'zipcode', 'postalcode');
+      const iProv = idxOf('provincia', 'prov', 'pr');
+      const iEmail = idxOf('email', 'mail');
+      const iSito = idxOf('sitoweb', 'sito', 'website', 'url');
+      const iCollab = idxOf('collaboratori', 'collaboratore');
+      const iDip = idxOf('dipendenti', 'dipendente');
+      const iCapSoc = idxOf('capitalesociale', 'capitalsociale');
+      const iValProd = idxOf('valoreproduzione', 'valoreproduz', 'valoreproduzioneannuo');
+      const iRicavi = idxOf('ricavi', 'fatturato');
+      const iUtile = idxOf('utile', 'utileoperdite', 'utileoperdita', 'perdite');
+      const iSettore = idxOf('settore', 'ateco', 'categoria');
+      const iNote = idxOf('note', 'nota', 'annotazioni');
+
+      const expectedFields = headers.length || 0;
+      const expectedSeps = Math.max(0, expectedFields - 1);
+
       const companies = [];
       let currentLine = '';
-      let fieldCount = 0;
 
-      for (let i = 1; i < lines.length; i++) {
-        currentLine += (currentLine ? '\n' : '') + lines[i];
-        fieldCount = (currentLine.match(/;/g) || []).length;
+      for (let li = 1; li < lines.length; li++) {
+        const line = lines[li];
+        if (line === undefined) continue;
 
-        // nel tuo CSV originale si arrivava ~16 campi
-        if (fieldCount >= 15) {
-          if (!currentLine.trim()) { currentLine = ''; continue; }
+        currentLine += (currentLine ? '\n' : '') + line;
+        const sepCount = (currentLine.match(/;/g) || []).length;
 
-          const v = currentLine.split(';').slice(0, 16);
+        // Accumula finché non abbiamo almeno i separatori attesi (gestione righe spezzate)
+        if (sepCount < expectedSeps) continue;
 
-          // P.IVA: se non presente nel CSV, la generiamo (TMP-uuid)
-          const piva = (v[16] || '').trim() || `TMP-${safeUUID()}`;
+        if (!currentLine.trim()) { currentLine = ''; continue; }
 
-          companies.push({
-            // id verrà generato dal DB; qui mettiamo solo un id temporaneo per React
-            _tmpId: `tmp_${Date.now()}_${i}_${Math.random().toString(36).slice(2)}`,
-            piva,
-            ragioneSociale: (v[0] || '').trim(),
-            telefono: (v[1] || '').split(/[\s\n]/)[0],
-            indirizzo: `${(v[2]||'').trim()}, ${(v[3]||'').trim()}, ${(v[4]||'').trim()} (${(v[5]||'').trim()})`.trim(),
-            email: (v[6] || '').trim(),
-            sitoWeb: (v[8] || '').trim(),
-            collaboratori: parseInt(v[9]) || 0,
-            dipendenti: parseInt(v[10]) || 0,
-            capitaleSociale: parseFinancialValue(v[11]),
-            valoreProduzione: parseFinancialValue(v[12]),
-            ricavi: parseFinancialValue(v[13]),
-            utileOPerdite: parseFinancialValue(v[14]),
-            settore: (v[15] || '').trim(),
-            titolare: '',
-            stato: (v[7] || '').toLowerCase().includes('non interessa') ? 'Non interessato' :
-                   (v[7] || '').toLowerCase().includes('mail') ? 'Contattato' : 'Nuovo',
-            tagPriorita: 'Nuovo',
-            notaInEvidenza: '',
-            timeline: v[7] ? [{
-              id: `t_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-              data: new Date().toISOString(),
-              tipo: 'nota',
-              testo: `Note da file: ${v[7]}`,
-              operatore: 'Import'
-            }] : [],
-          });
+        const v = currentLine.split(';');
+        // pad
+        while (v.length < expectedFields) v.push('');
 
-          currentLine = '';
-        }
+        const get = (idx) => (idx >= 0 ? (v[idx] || '').trim() : '');
+        const getInt = (idx) => parseInt(get(idx), 10) || 0;
+
+        const pivaRaw = get(iPiva);
+        const piva = pivaRaw ? pivaRaw : `TMP-${safeUUID()}`;
+
+        const note = get(iNote);
+        const stato = note.toLowerCase().includes('non interessa') ? 'Non interessato' :
+                      note.toLowerCase().includes('mail') ? 'Contattato' : 'Nuovo';
+
+        const ragioneSociale = get(iRag);
+        const indirizzo = [
+          get(iInd),
+          get(iComune),
+          get(iCap),
+          get(iProv) ? `(${get(iProv)})` : ''
+        ].filter(Boolean).join(', ').trim();
+
+        companies.push({
+          _tmpId: `tmp_${Date.now()}_${li}_${Math.random().toString(36).slice(2)}`,
+          piva,
+          ragioneSociale,
+          telefono: get(iTel).split(/[\s\n]/)[0],
+          indirizzo,
+          email: get(iEmail),
+          sitoWeb: get(iSito),
+          collaboratori: getInt(iCollab),
+          dipendenti: getInt(iDip),
+          capitaleSociale: parseFinancialValue(get(iCapSoc)),
+          valoreProduzione: parseFinancialValue(get(iValProd)),
+          ricavi: parseFinancialValue(get(iRicavi)),
+          utileOPerdite: parseFinancialValue(get(iUtile)),
+          settore: get(iSettore),
+          titolare: '',
+          stato,
+          tagPriorita: 'Nuovo',
+          notaInEvidenza: '',
+          timeline: note ? [{
+            id: `t_${Date.now()}_${Math.random()}`,
+            data: new Date().toISOString(),
+            tipo: 'nota',
+            testo: `Note da file: ${note}`,
+            operatore: 'Import'
+          }] : [],
+          dataCreazione: new Date().toISOString()
+        });
+
+        currentLine = '';
       }
+
       return companies;
-    };
+    };;
 
     /***********************
      * MAPPING DB <-> UI
@@ -422,41 +478,107 @@
       /***************
        * CSV import
        ***************/
-      const handleCSVImport = async (e) => {
+            const handleCSVImport = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
         try {
+          if (!userId) throw new Error('Devi essere loggato per importare.');
+
           const text = await file.text();
           const parsed = parseCSVData(text);
 
-          // normalizziamo: se P.IVA mancante -> già TMP-uuid
-          // e assicuriamo che piva ci sia sempre
-          const toInsert = parsed.map(c => ({
-            ...c,
-            piva: c.piva || `TMP-${safeUUID()}`
-          }));
+          // Validazioni base + normalizzazioni
+          const problems = [];
+          const candidates = parsed.map((c, idx) => {
+            const piva = (c.piva || '').trim() || `TMP-${safeUUID()}`;
+            const rag = (c.ragioneSociale || '').trim();
 
-          // upsert in bulk
-          const payload = toInsert.map(c => toDbCompany(c, userId));
+            if (!rag) problems.push({ idx, reason: 'Ragione Sociale mancante' });
+
+            return {
+              ...c,
+              piva,
+              ragioneSociale: rag
+            };
+          });
+
+          // Scarta righe invalide (per ora: ragione sociale mancante)
+          const invalidIdx = new Set(problems.map(p => p.idx));
+          const valid = candidates.filter((_, i) => !invalidIdx.has(i));
+
+          // Se non c'è nulla di valido, esci
+          if (valid.length === 0) {
+            alert(`Nessun record importabile. Problemi trovati: ${problems.length}`);
+            return;
+          }
+
+          // Pre-check duplicati su DB per PIVA (non sovrascriviamo: saltiamo)
+          const pivas = [...new Set(valid.map(c => c.piva))];
+
+          const existing = new Set();
+          const chunkSize = 200; // prudente
+          for (let i = 0; i < pivas.length; i += chunkSize) {
+            const chunk = pivas.slice(i, i + chunkSize);
+            const { data, error } = await supabase
+              .from('companies')
+              .select('piva')
+              .in('piva', chunk);
+
+            if (error) throw error;
+            (data || []).forEach(r => existing.add(r.piva));
+          }
+
+          const toImport = [];
+          let dupCount = 0;
+
+          valid.forEach(c => {
+            if (existing.has(c.piva)) {
+              dupCount += 1;
+              return; // skip (non sovrascrive)
+            }
+            toImport.push(c);
+          });
+
+          const skipInvalid = problems.length;
+          const skipDup = dupCount;
+          const skipTotal = skipInvalid + skipDup;
+
+          const msg =
+            `Verifica import CSV:\n\n` +
+            `• Record letti: ${parsed.length}\n` +
+            `• Importerà: ${toImport.length}\n` +
+            `• NON importerà: ${skipTotal}\n` +
+            `   - Duplicati PIVA già presenti: ${skipDup}\n` +
+            `   - Righe non valide: ${skipInvalid}\n\n` +
+            `Vuoi procedere con l'importazione?`;
+
+          if (!confirm(msg)) return;
+
+          if (toImport.length === 0) {
+            alert('Nessun record da importare (tutti duplicati o non validi).');
+            return;
+          }
+
+          const payload = toImport.map(c => toDbCompany(c, userId));
+
+          // Insert puro: non sovrascrive
           const { data, error } = await supabase
             .from('companies')
-            .upsert(payload, { onConflict: 'user_id,piva' })
+            .insert(payload)
             .select('*');
 
           if (error) throw error;
 
-          const mapped = (data || []).map(fromDbCompany);
-          // ricarico elenco per ordine pulito
           await loadCompanies();
 
-          alert(`Import completato: ${mapped.length} record inseriti/aggiornati`);
+          alert(`Import completato: ${toImport.length} inseriti, ${skipTotal} saltati.`);
         } catch (err) {
           alert(`Errore import CSV: ${err.message || err}`);
         } finally {
           e.target.value = '';
         }
-      };
+      };;
 
       /***************
        * Voice
