@@ -836,7 +836,7 @@ const handleCSVImport = async (e) => {
           : ((selectedCompanyId && currentView === 'detail') ? [selectedCompanyId] : []);
 
         if (targetIds.length === 0) {
-          alert('Seleziona un’azienda (oppure apri una scheda) prima di dare comandi vocali che modificano dati.');
+          notify('info', 'Seleziona un’azienda (oppure apri una scheda) prima di dare comandi vocali che modificano dati.');
           return;
         }
 
@@ -879,13 +879,25 @@ const handleCSVImport = async (e) => {
 
 
         // 4) Follow-up (slot)
-        // NOTA: usiamo la parola chiave "follow-up" per distinguere dagli appuntamenti puntuali
-        if (low.startsWith('follow-up')) {
-          followupWanted = cmd.substring(cmd.toLowerCase().indexOf('follow-up') + 'follow-up'.length).trim();
-        } else if (low.startsWith('imposta follow-up')) {
-          followupWanted = cmd.substring(cmd.toLowerCase().indexOf('imposta follow-up') + 'imposta follow-up'.length).trim();
-        } else if (low.startsWith('cancella follow-up') || low.startsWith('rimuovi follow-up')) {
+        // NOTA: la dettatura spesso trascrive "follow up" (senza trattino). Accettiamo:
+        //   - "follow-up ..." / "follow up ..." / "followup ..."
+        //   - "imposta follow-up ..." / "imposta follow up ..." / "imposta followup ..."
+        //   - "cancella/rimuovi follow-up" (tutte le varianti)
+
+        const reFU = /^\s*(?:imposta\s+)?follow\s*[- ]?\s*up\b\s*(.*)$/i;
+        const reFUClear = /^\s*(cancella|rimuovi)\s+follow\s*[- ]?\s*up\b/i;
+        const reFUCompact = /^\s*(?:imposta\s+)?followup\b\s*(.*)$/i;
+
+        if (reFUClear.test(cmd) || reFUClear.test(low)) {
           followupWanted = '__CLEAR__';
+        } else {
+          let m = cmd.match(reFU);
+          if (m) {
+            followupWanted = (m[1] || '').trim();
+          } else {
+            m = cmd.match(reFUCompact);
+            if (m) followupWanted = (m[1] || '').trim();
+          }
         }
 
         const matchSlot = (wanted) => {
