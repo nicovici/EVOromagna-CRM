@@ -1588,9 +1588,7 @@ ${namesPreview}${more}
                             .select('*')
                             .single();
                           if (error) throw error;
-                          setFollowupSlots(prev => [...prev, data]);
-                          notify('success', 'Slot creato.');
-                        } catch (e) {
+                          setFollowupSlots(prev => [...prev, data]);} catch (e) {
                           notify('error', e.message || String(e));
                         }
                       }}
@@ -1599,7 +1597,7 @@ ${namesPreview}${more}
                       Nuovo slot
                     </button>
                     <button
-                      onClick={async () => { try { await loadBlocks(); await loadCompanies(); notify('success','Aggiornato.'); } catch(e){ notify('error', e.message || String(e)); } }}
+                      onClick={async () => { try { await loadBlocks(); await loadCompanies();} catch(e){ notify('error', e.message || String(e)); } }}
                       className="px-4 py-2 rounded bg-gray-100 hover:bg-gray-200"
                     >
                       Aggiorna
@@ -1814,10 +1812,7 @@ ${namesPreview}${more}
                                           const gcal = googleCalendarLink({ title: block.titolo, startISO, endISO, details });
 
                                           setBlockWizard(prev => ({...prev, open:false}));
-                                          setSelectedInSlot([]);
-                                          notify('success', 'Blocco creato. Si aprirà la pagina del blocco; link Calendar pronto.');
-
-                                          // Apri blocco
+                                          setSelectedInSlot([]);// Apri blocco
                                           window.location.hash = `block=${block.id}`;
                                           setCurrentBlockId(block.id);
                                           setCurrentView('block');
